@@ -181,7 +181,11 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
+  /* 放到alllist里，处于阻塞状态 */
   init_thread (t, name, priority);
+
+  //intf("In thread create. %s thread inited\n", name);
+
   tid = t->tid = allocate_tid ();
 
   /* Prepare thread for first run by initializing its stack.
@@ -207,7 +211,9 @@ thread_create (const char *name, int priority,
   intr_set_level (old_level);
 
   /* Add to run queue. */
+  /* 放到就绪队列，更改状态为就绪 */
   thread_unblock (t);
+  //printf("In thread create. %s thread unblocked\n", name);
 
   return tid;
 }
@@ -228,6 +234,17 @@ thread_block (void)
   schedule ();
 }
 
+/* 比较优先级函数 */
+static bool
+value_less (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux UNUSED)
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+
+  return a->priority < b->priority;
+}
+
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -245,7 +262,10 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+
+  /* 放到就绪队列 */
   list_push_back (&ready_list, &t->elem);
+  //list_insert_ordered(&ready_list, &t->elem, value_less, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -310,13 +330,22 @@ void
 thread_yield (void) 
 {
   struct thread *cur = thread_current ();
+
+  //printf("yield thread name %s\n", cur->name);
+
   enum intr_level old_level;
   
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    {
+      list_push_back (&ready_list, &cur->elem);
+      //list_insert_ordered(&ready_list, &cur->elem, value_less, NULL);
+    }
+
+  /* 标记当前线程为就绪状态，下一步schedule()将当前线程放入就绪队列，
+   * 开始进行线程切换。 */
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -470,6 +499,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+  //list_insert_ordered(&all_list, &t->allelem, value_less, NULL);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -496,7 +526,13 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    {
+      //list_sort(&ready_list, value_less, NULL);
+      /* 获取就绪队列中优先级最大的线程，从就绪队列中移除，返回该线程 */
+      struct list_elem *max_elem = list_max (&ready_list, value_less, NULL);
+      list_remove (max_elem);
+      return list_entry (max_elem, struct thread, elem);
+    }
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -565,6 +601,8 @@ schedule (void)
 
   if (cur != next)
     prev = switch_threads (cur, next);
+
+  /* 完成线程切换 */
   thread_schedule_tail (prev);
 }
 
