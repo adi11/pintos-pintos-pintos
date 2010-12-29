@@ -129,6 +129,8 @@ main (void)
 
   printf ("Boot complete.\n");
   
+  printf ("qhm\n");
+
   /* Run actions specified on kernel command line. */
   run_actions (argv);
 

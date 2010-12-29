@@ -383,6 +383,7 @@ intr_handler (struct intr_frame *frame)
       in_external_intr = false;
       pic_end_of_interrupt (frame->vec_no); 
 
+      /* 如果是yield_on_return，则调用thread_yield，进行线程调度 */
       if (yield_on_return) 
         thread_yield (); 
     }
