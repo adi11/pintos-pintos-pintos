@@ -135,6 +135,7 @@ thread_tick (void)
     kernel_ticks++;
 
   /* Enforce preemption. */
+  /* 判断时间片是否到达，如果到达则yield */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
 }
@@ -214,6 +215,8 @@ thread_create (const char *name, int priority,
   /* 放到就绪队列，更改状态为就绪 */
   thread_unblock (t);
   //printf("In thread create. %s thread unblocked\n", name);
+
+  thread_yield();
 
   return tid;
 }
@@ -373,6 +376,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_yield();
 }
 
 /* Returns the current thread's priority. */
