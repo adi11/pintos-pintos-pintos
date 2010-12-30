@@ -92,8 +92,17 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  while (timer_elapsed (start) < ticks)
+    {
+      thread_yield ();
+      //printf("xunhuan li\n");
+//      printf("timer li %s - %d\n", thread_current()->name,
+//          thread_current()->priority);
+    }
+  //thread_yield ();
+  //printf("xunhuan wai\n");
+//  printf("%s - %d\n", thread_current()->name,
+//      thread_current()->priority);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -170,7 +179,9 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+  /* ticks 自增 */
   ticks++;
+
   thread_tick ();
 }
 
