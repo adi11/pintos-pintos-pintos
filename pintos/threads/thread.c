@@ -379,6 +379,19 @@ thread_set_priority (int new_priority)
   thread_yield();
 }
 
+/* 设置一个线程的优先级 modified base on thread_set_priority() */
+void
+thread_set_priority_with_thread (struct thread *thread,
+    int new_priority)
+{
+
+  ASSERT(thread != NULL)
+
+  thread->is_donee = true;
+  thread->priority = new_priority;
+  thread_yield();
+}
+
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
@@ -501,6 +514,9 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+  /* 初始化线程原始优先级 */
+  t->old_priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
   //list_insert_ordered(&all_list, &t->allelem, value_less, NULL);
