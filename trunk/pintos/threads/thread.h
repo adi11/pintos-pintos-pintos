@@ -88,6 +88,9 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+
+    bool is_donee;                      /* 用于判断是否是被捐献者 */
+    int old_priority;                   /* 原来的优先级（用于被捐献优先级的线程） */
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
