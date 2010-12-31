@@ -84,25 +84,60 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+/* 设置闹铃并开启睡眠 */
+void
+alarm_on(struct thread *t, int ticks)
+{
+  enum intr_level old_level;
+
+  t->sleep_ticks = ticks;
+
+  /* thread_block()方法需要关闭中断 */
+  old_level = intr_disable ();
+  thread_block();
+  intr_set_level (old_level);
+}
+
+/* 检查进程睡眠闹钟时间是否到达 */
+void
+alarm_check(struct thread *t, void *aux UNUSED)
+{
+  if (t->status == THREAD_BLOCKED)
+    {
+      if (t->sleep_ticks > 0)
+        {
+          t->sleep_ticks--;
+          /* 如果睡眠时间减1后，sleep_ticks变为0，则应该唤醒该进程 */
+          if (t->sleep_ticks == 0)
+            {
+              alarm_wakeup (t);
+            }
+        }
+    }
+}
+
+/* 闹钟时间到，唤醒睡眠进程。 */
+void
+alarm_wakeup(struct thread *t)
+{
+  /* 解除阻塞，放到就绪队列。 */
+  thread_unblock (t);
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
-timer_sleep (int64_t ticks) 
+timer_sleep (int64_t ticks)
 {
-  int64_t start = timer_ticks ();
-
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks)
+
+  /* 如果睡眠ticks数量<=0，直接返回 */
+  if (ticks <= 0)
     {
-      thread_yield ();
-      //printf("xunhuan li\n");
-//      printf("timer li %s - %d\n", thread_current()->name,
-//          thread_current()->priority);
+      return;
     }
-  //thread_yield ();
-  //printf("xunhuan wai\n");
-//  printf("%s - %d\n", thread_current()->name,
-//      thread_current()->priority);
+
+  alarm_on (thread_current (), ticks);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -179,9 +214,16 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
-  /* ticks 自增 */
+  enum intr_level oldlevel = intr_disable ();
+
+  /* ticks增加 */
   ticks++;
 
+  /* 遍历all_list链表中所有进程，进行闹铃检测。 */
+  thread_foreach (alarm_check, 0);
+  intr_set_level (oldlevel);
+
+  /* 如果时间片到，会进行调度 */
   thread_tick ();
 }
 

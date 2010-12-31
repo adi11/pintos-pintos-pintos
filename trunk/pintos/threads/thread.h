@@ -88,9 +88,13 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    int ori_pri;                        /* 最原始的优先级 */
 
-    bool is_donee;                      /* 用于判断是否是被捐献者 */
-    int old_priority;                   /* 原来的优先级（用于被捐献优先级的线程） */
+    int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
+
+    //struct list old_priority_list;      /* 过去优先级存储链表 */
+    struct list hold_lock_list;         /* 该线程持有锁的链表 */
+
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -103,6 +107,12 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+  };
+
+struct lock_elem
+  {
+    struct list_elem elem;
+    struct lock *lock;          /* 锁 */
   };
 
 /* If false (default), use round-robin scheduler.
