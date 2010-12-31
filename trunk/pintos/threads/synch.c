@@ -212,6 +212,7 @@ void
 lock_acquire (struct lock *lock)
 {
   enum intr_level old_level;
+  struct list_elem *e;
 
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
@@ -219,14 +220,32 @@ lock_acquire (struct lock *lock)
 
   old_level = intr_disable ();
 
+  /* 将当前进程请求的锁放入请求锁列表中。 */
+  list_push_back (&thread_current()->acquire_lock_list, &lock->acquire_elem);
+
   /* 如果当前线程不是锁的持有者，并且当前线程的优先级比锁的持有者优先级高，
    * 则将当前优先级捐献给锁的持有者。 */
-  if (lock->holder != NULL && !lock_held_by_current_thread (lock)
+  if (lock->holder != NULL
       && thread_get_priority () > lock->holder->priority)
     {
       thread_update_priority_with_thread (lock->holder,
           thread_get_priority ());
       lock->holder->is_donee = true;
+
+      if (!list_empty(&(lock->holder->acquire_lock_list)))
+        {
+          /* 遍历所有请求锁列表，查找请求锁中，锁持有者小于当前进程的进程，
+           * 进行优先级级联捐赠。 */
+          for(e = list_begin(&(lock->holder->acquire_lock_list));
+              e != list_end(&(lock->holder->acquire_lock_list));
+              e = list_next(e))
+            {
+              struct lock *l =
+                  list_entry (e, struct lock, acquire_elem);
+              thread_update_priority_with_thread(l->holder,
+                  thread_get_priority());
+            }
+        }
     }
 
   intr_set_level (old_level);
@@ -236,6 +255,9 @@ lock_acquire (struct lock *lock)
 
   old_level = intr_disable ();
   lock->holder = thread_current ();
+
+  /* 更新进程请求锁 */
+  list_remove(&lock->acquire_elem);
 
   /* 更新线程持有的锁 */
   list_push_back(&thread_current ()->hold_lock_list, &lock->elem);

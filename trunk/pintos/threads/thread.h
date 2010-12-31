@@ -95,6 +95,7 @@ struct thread
 
     bool is_donee;                      /* 是否是被捐赠优先级者 */
     struct list hold_lock_list;         /* 该线程持有锁的链表 */
+    struct list acquire_lock_list;      /* 请求的锁的链表 */
 
     struct list_elem allelem;           /* List element for all threads list. */
 
