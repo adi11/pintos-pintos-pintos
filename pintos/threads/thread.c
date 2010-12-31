@@ -533,6 +533,9 @@ init_thread (struct thread *t, const char *name, int priority)
   /* 初始化持有锁链表 */
   list_init (&t->hold_lock_list);
 
+  /* 初始化请求的锁链表 */
+  list_init (&t->acquire_lock_list);
+
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
