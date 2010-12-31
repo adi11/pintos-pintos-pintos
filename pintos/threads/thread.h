@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -92,7 +93,7 @@ struct thread
 
     int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
 
-    //struct list old_priority_list;      /* 过去优先级存储链表 */
+    bool is_donee;                      /* 是否是被捐赠优先级者 */
     struct list hold_lock_list;         /* 该线程持有锁的链表 */
 
     struct list_elem allelem;           /* List element for all threads list. */
@@ -112,7 +113,7 @@ struct thread
 struct lock_elem
   {
     struct list_elem elem;
-    struct lock *lock;          /* 锁 */
+    struct lock *alock;          /* 锁 */
   };
 
 /* If false (default), use round-robin scheduler.

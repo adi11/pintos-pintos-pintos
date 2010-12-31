@@ -28,6 +28,11 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* 两种方法：1.使用额外的链表，保存所有睡眠的进程的信息。（费空间）
+ *         2.使用all_list，然后遍历寻找睡眠进程。（费时间）
+ * 暂时使用第一种方法，链表为sleep_list。 */
+static struct list sleep_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -70,6 +75,17 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+
+/* 比较优先级函数 */
+static bool
+value_less (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux UNUSED)
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+
+  return a->priority < b->priority;
+}
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -135,9 +151,12 @@ thread_tick (void)
     kernel_ticks++;
 
   /* Enforce preemption. */
-  /* 判断时间片是否到达，如果到达则yield */
+  /* 判断时间片是否到达，如果到达则yield。round-robin */
   if (++thread_ticks >= TIME_SLICE)
-    intr_yield_on_return ();
+    {
+      /* 此函数稍候会调用thread_yield()函数 */
+      intr_yield_on_return ();
+    }
 }
 
 /* Prints thread statistics. */
@@ -184,9 +203,6 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   /* 放到alllist里，处于阻塞状态 */
   init_thread (t, name, priority);
-
-  //intf("In thread create. %s thread inited\n", name);
-
   tid = t->tid = allocate_tid ();
 
   /* Prepare thread for first run by initializing its stack.
@@ -211,10 +227,8 @@ thread_create (const char *name, int priority,
 
   intr_set_level (old_level);
 
-  /* Add to run queue. */
   /* 放到就绪队列，更改状态为就绪 */
   thread_unblock (t);
-  //printf("In thread create. %s thread unblocked\n", name);
 
   thread_yield();
 
@@ -237,17 +251,6 @@ thread_block (void)
   schedule ();
 }
 
-/* 比较优先级函数 */
-static bool
-value_less (const struct list_elem *a_, const struct list_elem *b_,
-            void *aux UNUSED)
-{
-  const struct thread *a = list_entry (a_, struct thread, elem);
-  const struct thread *b = list_entry (b_, struct thread, elem);
-
-  return a->priority < b->priority;
-}
-
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -268,7 +271,6 @@ thread_unblock (struct thread *t)
 
   /* 放到就绪队列 */
   list_push_back (&ready_list, &t->elem);
-  //list_insert_ordered(&ready_list, &t->elem, value_less, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -333,9 +335,6 @@ void
 thread_yield (void) 
 {
   struct thread *cur = thread_current ();
-
-  //printf("yield thread name %s\n", cur->name);
-
   enum intr_level old_level;
   
   ASSERT (!intr_context ());
@@ -344,7 +343,6 @@ thread_yield (void)
   if (cur != idle_thread) 
     {
       list_push_back (&ready_list, &cur->elem);
-      //list_insert_ordered(&ready_list, &cur->elem, value_less, NULL);
     }
 
   /* 标记当前线程为就绪状态，下一步schedule()将当前线程放入就绪队列，
@@ -375,21 +373,29 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
-  thread_yield();
+  if (!thread_current ()->is_donee)
+    {
+      thread_current ()->priority = new_priority;
+
+      /* 设置优先级后立即进行调度，抢占方式。 */
+      thread_yield();
+    }
+  else
+    {
+      thread_current()->ori_pri = new_priority;
+    }
 }
 
-/* 设置一个线程的优先级 modified base on thread_set_priority() */
+/* 设置一个线程的优先级 modified base on thread_set_priority()，
+ * 用于更改处于非运行状态的线程的优先级，方法返回前不掉用thread_yield()，
+ * （与thread_set_priority方法不同，非抢占）。 */
 void
-thread_set_priority_with_thread (struct thread *thread,
+thread_update_priority_with_thread (struct thread *thread,
     int new_priority)
 {
-
   ASSERT(thread != NULL)
 
-  thread->is_donee = true;
   thread->priority = new_priority;
-  thread_yield();
 }
 
 /* Returns the current thread's priority. */
@@ -515,11 +521,20 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
 
-  /* 初始化线程原始优先级 */
-  t->old_priority = priority;
+  /* 初始化睡眠ticks数量 */
+  t->sleep_ticks = 0;
+
+  /* 初始化最原始的优先级（保存） */
+  t->ori_pri = priority;
+
+  /* 初始化为不是优先级被捐赠者。 */
+  t->is_donee = false;
+
+  /* 初始化持有锁链表 */
+  list_init (&t->hold_lock_list);
+
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
-  //list_insert_ordered(&all_list, &t->allelem, value_less, NULL);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -544,11 +559,14 @@ static struct thread *
 next_thread_to_run (void) 
 {
   if (list_empty (&ready_list))
-    return idle_thread;
+    {
+      return idle_thread;
+    }
   else
     {
-      //list_sort(&ready_list, value_less, NULL);
-      /* 获取就绪队列中优先级最大的线程，从就绪队列中移除，返回该线程 */
+      /* 获取就绪队列中优先级最大的线程，从就绪队列中移除，返回该线程。
+       * 如果有多个优先级最大的线程，则选择最早放入就绪队列中的线程，
+       * 参见list_max函数注释。 */
       struct list_elem *max_elem = list_max (&ready_list, value_less, NULL);
       list_remove (max_elem);
       return list_entry (max_elem, struct thread, elem);
@@ -619,10 +637,12 @@ schedule (void)
   ASSERT (cur->status != THREAD_RUNNING);
   ASSERT (is_thread (next));
 
+  /* 切换next_thread为cur_thread。cur_thread为pre_thread（返回值），
+   * prev用于下一个thread_schedule_tail()函数，如果dying进行销毁。 */
   if (cur != next)
     prev = switch_threads (cur, next);
 
-  /* 完成线程切换 */
+  /* 完成线程切换，将next_thread标记为运行状态。 */
   thread_schedule_tail (prev);
 }
 

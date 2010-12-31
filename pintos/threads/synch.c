@@ -32,6 +32,17 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+/* 比较优先级函数 */
+static bool
+priority_less (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux UNUSED)
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+
+  return a->priority < b->priority;
+}
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -75,37 +86,6 @@ sema_down (struct semaphore *sema)
   intr_set_level (old_level);
 }
 
-/* 暂时不用了 */
-/* 用于lock中的sema_down调用，处理优先级捐献问题
- * modified base by sema_down */
-void
-sema_down_with_lock (struct lock *lock)
-{
-  enum intr_level old_level;
-  struct semaphore *sema;
-
-  //ASSERT (sema != NULL);
-  ASSERT (lock != NULL);
-  ASSERT (!intr_context ());
-
-  old_level = intr_disable ();
-
-  sema = &lock->semaphore;
-
-  /* 设置锁(lock)的持有者(holder)的优先级
-   * 由当前线程的优先级进行捐献 */
-  thread_set_priority_with_thread(lock->holder,
-      thread_get_priority());
-
-  while (sema->value == 0)
-    {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
-      thread_block ();
-    }
-  sema->value--;
-  intr_set_level (old_level);
-}
-
 /* Down or "P" operation on a semaphore, but only if the
    semaphore is not already 0.  Returns true if the semaphore is
    decremented, false otherwise.
@@ -132,17 +112,6 @@ sema_try_down (struct semaphore *sema)
   return success;
 }
 
-/* 比较优先级函数 */
-static bool
-value_less (const struct list_elem *a_, const struct list_elem *b_,
-            void *aux UNUSED)
-{
-  const struct thread *a = list_entry (a_, struct thread, elem);
-  const struct thread *b = list_entry (b_, struct thread, elem);
-
-  return a->priority < b->priority;
-}
-
 /* Up or "V" operation on a semaphore.  Increments SEMA's value
    and wakes up one thread of those waiting for SEMA, if any.
 
@@ -158,15 +127,16 @@ sema_up (struct semaphore *sema)
   if (!list_empty (&sema->waiters))
     {
       /* 唤醒优先级最高的线程 */
-      struct list_elem *max_elem = list_max (&sema->waiters, value_less, NULL);
+      struct list_elem *max_elem = list_max (&sema->waiters, priority_less, NULL);
       list_remove (max_elem);
       thread_unblock (list_entry (max_elem, struct thread, elem));
     }
+
   sema->value++;
   intr_set_level (old_level);
 
   /* 线程调度 */
-  thread_yield();
+  thread_yield ();
 }
 
 static void sema_test_helper (void *sema_);
@@ -241,24 +211,36 @@ lock_init (struct lock *lock)
 void
 lock_acquire (struct lock *lock)
 {
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  /* 判断当前线程是否是锁的持有者。
-   * 判断当前线程的优先级和锁的持有者的优先级高低。
-   *
-   * 如果当前线程不是锁的持有者，并且当前线程的优先级比锁的持有者优先级高，
+  old_level = intr_disable ();
+
+  /* 如果当前线程不是锁的持有者，并且当前线程的优先级比锁的持有者优先级高，
    * 则将当前优先级捐献给锁的持有者。 */
-  if (lock->holder != NULL && lock->holder != thread_current()
-      && thread_current()->priority > lock->holder->priority)
+  if (lock->holder != NULL && !lock_held_by_current_thread (lock)
+      && thread_get_priority () > lock->holder->priority)
     {
-      thread_set_priority_with_thread(lock->holder,
-          thread_current()->priority);
+      thread_update_priority_with_thread (lock->holder,
+          thread_get_priority ());
+      lock->holder->is_donee = true;
     }
+
+  intr_set_level (old_level);
+
+  /* 如果阻塞，会进行调度。 */
   sema_down (&lock->semaphore);
-  //sema_down_with_lock (&lock);
+
+  old_level = intr_disable ();
   lock->holder = thread_current ();
+
+  /* 更新线程持有的锁 */
+  list_push_back(&thread_current ()->hold_lock_list, &lock->elem);
+
+  intr_set_level (old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -289,17 +271,75 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  struct list_elem *e;
+  int max_priority = PRI_MIN;
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
-  /* 恢复被捐献的前的原始优先级 */
-  if (lock->holder->is_donee)
-    {
-      thread_current()->is_donee = false;
-      thread_set_priority(lock->holder->old_priority);
-    }
+  old_level = intr_disable ();
+  /* 将这个锁从当前进程的hold_lock_list移除 */
+  list_remove(&lock->elem);
 
   lock->holder = NULL;
+
+  /* 判断当前进程还持有锁的链表是否为空 */
+  if (!list_empty (&thread_current ()->hold_lock_list))
+    {
+      /* 寻找该线程所持有的所有锁，找到锁的等待队列中优先级最大的进程的优先级 */
+      for (e = list_begin (&thread_current ()->hold_lock_list);
+          e != list_end (&thread_current ()->hold_lock_list);
+          e = list_next (e))
+        {
+          struct lock *l =
+              list_entry (e, struct lock, elem);
+          if (!list_empty (&(l->semaphore.waiters)))
+            {
+              struct list_elem *thread_elem =
+                  list_max (&(l->semaphore.waiters), priority_less, NULL);
+              struct thread *thread =
+                  list_entry (thread_elem, struct thread, elem);
+              if (thread->priority > max_priority)
+                {
+                  max_priority = thread->priority;
+                }
+            }
+        }
+
+      /* 如果当前进程优先级小于持有锁队列中进程的最大优先级，则进行被捐赠，将
+       * 优先级设置为该最大值。 */
+      if (thread_current()->priority < max_priority)
+        {
+          thread_update_priority_with_thread (thread_current (),
+              max_priority);
+          thread_current ()->is_donee = true;
+        }
+      else
+        {
+          /* 如果当前进程处有被捐助优先级状态，并且当前优先级大于持有锁的队列中
+           * 进程的优先级，则将当前进程的优先级设置为持有锁队列中最大优先级。*/
+          if (thread_current()->is_donee)
+            {
+              thread_update_priority_with_thread (thread_current (),
+                  max_priority);
+            }
+        }
+    }
+  else
+    {
+      /* 如果当前进程为被捐赠优先级进程，并且所持有的锁个数为0时，
+       * 恢复该进程最原始的优先级。 */
+      if (thread_current ()->is_donee)
+        {
+          thread_update_priority_with_thread (thread_current (),
+              thread_current ()->ori_pri);
+          thread_current ()->is_donee = false;
+        }
+    }
+
+  intr_set_level (old_level);
+
   sema_up (&lock->semaphore);
 }
 
