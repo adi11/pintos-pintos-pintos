@@ -380,12 +380,12 @@ thread_set_priority (int new_priority)
       thread_current ()->ori_pri = new_priority;
 
       /* 设置优先级后立即进行调度，抢占方式。 */
-      thread_yield();
+      thread_yield ();
     }
   /* 如果是被捐赠者，当前设置的优先级不能立即生效，需等待变为非被捐赠者时进行变更。 */
   else
     {
-      thread_current()->ori_pri = new_priority;
+      thread_current ()->ori_pri = new_priority;
     }
 }
 
@@ -396,7 +396,7 @@ void
 thread_update_priority_with_thread (struct thread *thread,
     int new_priority)
 {
-  ASSERT(thread != NULL)
+  ASSERT (thread != NULL)
 
   thread->priority = new_priority;
 }

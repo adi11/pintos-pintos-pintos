@@ -23,7 +23,7 @@ struct lock
     struct thread *holder;              /* Thread holding lock (for debugging). */
     struct semaphore semaphore;         /* Binary semaphore controlling access. */
 
-    struct list_elem elem;              /* List element. */
+    struct list_elem elem;              /* 用于hold_lock_list element. */
     struct list_elem acquire_elem;      /* 用于acquire_lock_list element */
   };
 
