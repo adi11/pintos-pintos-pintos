@@ -111,12 +111,6 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
-struct lock_elem
-  {
-    struct list_elem elem;
-    struct lock *alock;          /* 锁 */
-  };
-
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
