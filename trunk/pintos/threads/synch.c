@@ -200,7 +200,8 @@ lock_init (struct lock *lock)
   sema_init (&lock->semaphore, 1);
 }
 
-void donate_chain(struct list *acquire_lock_list)
+/* 递归进行优先级捐赠 */
+void donate_chain (struct list *acquire_lock_list)
 {
   struct list_elem *e;
 
@@ -267,10 +268,10 @@ lock_acquire (struct lock *lock)
   lock->holder = thread_current ();
 
   /* 更新进程请求锁 */
-  list_remove(&lock->acquire_elem);
+  list_remove (&lock->acquire_elem);
 
   /* 更新线程持有的锁 */
-  list_push_back(&thread_current ()->hold_lock_list, &lock->elem);
+  list_push_back (&thread_current ()->hold_lock_list, &lock->elem);
 
   intr_set_level (old_level);
 }
@@ -295,6 +296,36 @@ lock_try_acquire (struct lock *lock)
   return success;
 }
 
+/* 从一个进程持有锁链表中寻找优先级最大的进程的优先级值。 */
+int
+get_max_priority_thread (struct list *thread_hold_lock_list)
+{
+  struct list_elem *e;
+  int max_priority = PRI_MIN;
+
+  /* 寻找该线程所持有的所有锁，找到锁的等待队列中优先级最大的进程的优先级 */
+  for (e = list_begin (thread_hold_lock_list);
+        e != list_end (thread_hold_lock_list);
+        e = list_next (e))
+    {
+      struct lock *l =
+          list_entry (e, struct lock, elem);
+      if (!list_empty (&(l->semaphore.waiters)))
+        {
+          struct list_elem *thread_elem =
+              list_max (&(l->semaphore.waiters), priority_less, NULL);
+          struct thread *thread =
+              list_entry (thread_elem, struct thread, elem);
+          if (thread->priority > max_priority)
+            {
+              max_priority = thread->priority;
+            }
+        }
+    }
+
+  return max_priority;
+}
+
 /* Releases LOCK, which must be owned by the current thread.
 
    An interrupt handler cannot acquire a lock, so it does not
@@ -303,45 +334,26 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
-  struct list_elem *e;
-  int max_priority = PRI_MIN;
   enum intr_level old_level;
+  int max_priority;
 
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
   old_level = intr_disable ();
   /* 将这个锁从当前进程的hold_lock_list移除 */
-  list_remove(&lock->elem);
+  list_remove (&lock->elem);
 
   lock->holder = NULL;
 
   /* 判断当前进程还持有锁的链表是否为空 */
   if (!list_empty (&thread_current ()->hold_lock_list))
     {
-      /* 寻找该线程所持有的所有锁，找到锁的等待队列中优先级最大的进程的优先级 */
-      for (e = list_begin (&thread_current ()->hold_lock_list);
-          e != list_end (&thread_current ()->hold_lock_list);
-          e = list_next (e))
-        {
-          struct lock *l =
-              list_entry (e, struct lock, elem);
-          if (!list_empty (&(l->semaphore.waiters)))
-            {
-              struct list_elem *thread_elem =
-                  list_max (&(l->semaphore.waiters), priority_less, NULL);
-              struct thread *thread =
-                  list_entry (thread_elem, struct thread, elem);
-              if (thread->priority > max_priority)
-                {
-                  max_priority = thread->priority;
-                }
-            }
-        }
-
+      max_priority =
+          get_max_priority_thread (&thread_current ()->hold_lock_list);
       /* 如果当前进程优先级小于持有锁队列中进程的最大优先级，则进行被捐赠，将
        * 优先级设置为该最大值。 */
-      if (thread_current()->priority < max_priority)
+      if (thread_current ()->priority < max_priority)
         {
           thread_update_priority_with_thread (thread_current (),
               max_priority);
@@ -351,7 +363,7 @@ lock_release (struct lock *lock)
         {
           /* 如果当前进程处有被捐助优先级状态，并且当前优先级大于持有锁的队列中
            * 进程的优先级，则将当前进程的优先级设置为持有锁队列中最大优先级。*/
-          if (thread_current()->is_donee)
+          if (thread_current ()->is_donee)
             {
               thread_update_priority_with_thread (thread_current (),
                   max_priority);
