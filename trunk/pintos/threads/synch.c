@@ -200,6 +200,30 @@ lock_init (struct lock *lock)
   sema_init (&lock->semaphore, 1);
 }
 
+void donate_chain(struct list *acquire_lock_list)
+{
+  struct list_elem *e;
+
+  if (!list_empty(acquire_lock_list))
+    {
+      /* 遍历所有请求锁列表，查找请求锁中，锁持有者小于当前进程的进程，
+       * 进行优先级级联捐赠。 */
+      for(e = list_begin(acquire_lock_list);
+          e != list_end(acquire_lock_list);
+          e = list_next(e))
+        {
+          struct lock *l =
+              list_entry (e, struct lock, acquire_elem);
+          if (l->holder != NULL)
+            {
+              thread_update_priority_with_thread(l->holder,
+                  thread_get_priority());
+              donate_chain (&l->holder->acquire_lock_list);
+            }
+        }
+    }
+}
+
 /* Acquires LOCK, sleeping until it becomes available if
    necessary.  The lock must not already be held by the current
    thread.
@@ -212,7 +236,6 @@ void
 lock_acquire (struct lock *lock)
 {
   enum intr_level old_level;
-  struct list_elem *e;
 
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
@@ -232,20 +255,7 @@ lock_acquire (struct lock *lock)
           thread_get_priority ());
       lock->holder->is_donee = true;
 
-      if (!list_empty(&(lock->holder->acquire_lock_list)))
-        {
-          /* 遍历所有请求锁列表，查找请求锁中，锁持有者小于当前进程的进程，
-           * 进行优先级级联捐赠。 */
-          for(e = list_begin(&(lock->holder->acquire_lock_list));
-              e != list_end(&(lock->holder->acquire_lock_list));
-              e = list_next(e))
-            {
-              struct lock *l =
-                  list_entry (e, struct lock, acquire_elem);
-              thread_update_priority_with_thread(l->holder,
-                  thread_get_priority());
-            }
-        }
+      donate_chain (&(lock->holder->acquire_lock_list));
     }
 
   intr_set_level (old_level);
