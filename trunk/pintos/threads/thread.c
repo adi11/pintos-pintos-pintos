@@ -55,6 +55,8 @@ static long long idle_ticks;    /* # of timer ticks spent idle. */
 static long long kernel_ticks;  /* # of timer ticks in kernel threads. */
 static long long user_ticks;    /* # of timer ticks in user programs. */
 
+static fixedpoint load_avg;     /* load_avg. */
+
 /* Scheduling. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /* # of timer ticks since last yield. */
@@ -427,11 +429,31 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return convert_fixedpoint_to_int(
+      fixedpoint_multiply_int(load_avg, 100));
 }
 
-/* Returns 100 times the current thread's recent_cpu value. */
+/* load_avg = (59/60)*load_avg + (1/60)*ready_threads.
+ * (59/60)*(2^14) = 16,111(fixedpoint).
+ * (1/60)*(2^14) = 273(fixedpoint).
+ */
+void load_avg_update()
+{
+  int ready_threads = list_size(&ready_list);
+
+  /* 如果当前运行的进程不是空闲进程，则将ready_threads数量+1. */
+  if (strcmp(thread_current()->name, "idle") != 0)
+    {
+      ready_threads += 1;
+    }
+
+  load_avg = fixedpoint_multiply(16111, load_avg)
+      + fixedpoint_multiply_int(273, ready_threads);
+}
+
+/* Returns 100 times the current thread's recent_cpu value.
+ * recent_cpu = (2*load_avg )/(2*load_avg + 1) * recent_cpu + nice .
+ * */
 int
 thread_get_recent_cpu (void) 
 {
