@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "synch.h"
+#include "fixed-point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -89,13 +90,15 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    int ori_pri;                        /* 最原始的优先级 */
 
     int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
 
+    int ori_pri;                        /* 最原始的优先级 */
     bool is_donee;                      /* 是否是被捐赠优先级者 */
     struct list hold_lock_list;         /* 该线程持有锁的链表 */
     struct list acquire_lock_list;      /* 请求的锁的链表 */
+
+    fixedpoint load_avg;                /* load_avg */
 
     struct list_elem allelem;           /* List element for all threads list. */
 
