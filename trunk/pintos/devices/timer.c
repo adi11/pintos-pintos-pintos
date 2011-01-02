@@ -219,6 +219,13 @@ timer_interrupt (struct intr_frame *args UNUSED)
   /* ticks增加 */
   ticks++;
 
+  /* 更新当前非idle进程运行进程recent_cpu. */
+  if (!thread_is_idle ())
+    {
+      thread_current ()->recent_cpu =
+          fixedpoint_add_int(thread_current ()->recent_cpu, 1);
+    }
+
   /*
   load avg must be updated exactly when the system tick counter
   reaches a multiple of a second, that is, when timer_ticks ()
@@ -226,7 +233,11 @@ timer_interrupt (struct intr_frame *args UNUSED)
    */
   if (ticks % TIMER_FREQ == 0)
     {
+      /* 更新load_avg. */
       load_avg_update();
+
+      /* 更新所有进程的rencent_cpu. */
+      thread_foreach (thread_recent_cpu_update, 0);
     }
 
   /* 遍历all_list链表中所有进程，进行闹铃检测。 */

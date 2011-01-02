@@ -89,6 +89,12 @@ value_less (const struct list_elem *a_, const struct list_elem *b_,
   return a->priority < b->priority;
 }
 
+bool
+thread_is_idle()
+{
+  return thread_current () == idle_thread;
+}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -437,12 +443,18 @@ thread_get_load_avg (void)
  * (59/60)*(2^14) = 16,111(fixedpoint).
  * (1/60)*(2^14) = 273(fixedpoint).
  */
-void load_avg_update()
+void
+load_avg_update()
 {
   int ready_threads = list_size(&ready_list);
 
+  /*
+  where ready threads is the number of threads that are either
+  running or ready to run at time of update (not including the
+  idle thread).
+   */
   /* 如果当前运行的进程不是空闲进程，则将ready_threads数量+1. */
-  if (strcmp(thread_current()->name, "idle") != 0)
+  if (!thread_is_idle ())
     {
       ready_threads += 1;
     }
@@ -457,8 +469,30 @@ void load_avg_update()
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return convert_fixedpoint_to_int(
+      fixedpoint_multiply_int(thread_current ()->recent_cpu, 100));
+}
+
+/* 更新进程recent_cpu。
+ * recent_cpu = (2*load_avg )/(2*load_avg + 1) * recent_cpu + nice
+ * */
+void
+thread_recent_cpu_update (struct thread *t, void *aux UNUSED)
+{
+  /*
+   * You may need to think about the order of calculations in this
+   * formula. We recommend computing the coefficient of recent cpu
+   * first, then multiplying. Some students have reported that
+   * multiplying load avg by recent cpu directly can cause overflow.
+   */
+
+  fixedpoint double_load_avg = fixedpoint_multiply_int(load_avg, 2);
+  fixedpoint double_load_avg_plus_one =
+      fixedpoint_add_int(double_load_avg, 1);
+  fixedpoint temp = fixedpoint_divide(double_load_avg,
+      double_load_avg_plus_one);
+  temp = fixedpoint_multiply(temp, t->recent_cpu);
+  t->recent_cpu = temp + convert_int_to_fixedpoint(t->nice);
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -554,6 +588,12 @@ init_thread (struct thread *t, const char *name, int priority)
 
   /* 初始化为不是优先级被捐赠者。 */
   t->is_donee = false;
+
+  /* 初始化recent_cpu为0.*/
+  t->recent_cpu = 0;
+
+  /* 初始化nice为0. */
+  t->nice = 0;
 
   /* 初始化持有锁链表 */
   list_init (&t->hold_lock_list);

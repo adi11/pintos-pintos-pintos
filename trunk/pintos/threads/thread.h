@@ -98,7 +98,8 @@ struct thread
     struct list hold_lock_list;         /* 该线程持有锁的链表 */
     struct list acquire_lock_list;      /* 请求的锁的链表 */
 
-    fixedpoint load_avg;                /* load_avg */
+    fixedpoint recent_cpu;              /* recent_cpu */
+    int nice;                           /* nice */
 
     struct list_elem allelem;           /* List element for all threads list. */
 
@@ -148,6 +149,9 @@ void thread_set_priority (int);
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
+void thread_recent_cpu_update (struct thread *t, void *aux UNUSED);
 int thread_get_load_avg (void);
+
+bool thread_is_idle();
 
 #endif /* threads/thread.h */
