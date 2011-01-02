@@ -67,9 +67,3 @@ fixedpoint_divide_int (fixedpoint x, int n)
 {
   return x / n;
 }
-
-/* some test cases for fixed-point implement. */
-void fixedpoint_test()
-{
-
-}

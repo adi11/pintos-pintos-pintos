@@ -48,8 +48,8 @@
 */
 
 #define Q 14
-//#define F 1 << Q      why wrong when compute ((x + F / 2) / F)?
-#define F 16384
+//#define F 1 << Q    why wrong when compute ((x + F / 2) / F)? 答：要加括号
+#define F (1 << Q)    /* 1 << Q(Q=14)是16384 */
 
 typedef int fixedpoint;
 

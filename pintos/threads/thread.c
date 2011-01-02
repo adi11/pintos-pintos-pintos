@@ -122,6 +122,9 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+  /* 初始化initial_thread的nice为0。*/
+  initial_thread->nice = 0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -381,19 +384,23 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  /* 如果不是被捐赠者 */
-  if (!thread_current ()->is_donee)
+  /* 判断是否是多级反馈调度。*/
+  if (!thread_mlfqs)
     {
-      thread_current ()->priority = new_priority;
-      thread_current ()->ori_pri = new_priority;
+      /* 如果不是被捐赠者 */
+      if (!thread_current ()->is_donee)
+        {
+          thread_current ()->priority = new_priority;
+          thread_current ()->ori_pri = new_priority;
 
-      /* 设置优先级后立即进行调度，抢占方式。 */
-      thread_yield ();
-    }
-  /* 如果是被捐赠者，当前设置的优先级不能立即生效，需等待变为非被捐赠者时进行变更。 */
-  else
-    {
-      thread_current ()->ori_pri = new_priority;
+          /* 设置优先级后立即进行调度，抢占方式。 */
+          thread_yield ();
+        }
+      /* 如果是被捐赠者，当前设置的优先级不能立即生效，需等待变为非被捐赠者时进行变更。 */
+      else
+        {
+          thread_current ()->ori_pri = new_priority;
+        }
     }
 }
 
@@ -416,27 +423,68 @@ thread_get_priority (void)
   return thread_current ()->priority;
 }
 
-/* Sets the current thread's nice value to NICE. */
+/* 更新进程优先级（针对mlfqs调度）
+ * 公式：priority = PRI_MAX - (recent_cpu / 4) - (nice * 2)
+ * 优先级要符合小于PRI_MAX并且大于PRI_MIN。
+ */
+void
+thread_priority_update(struct thread *t, void *aux UNUSED)
+{
+  int priority = PRI_MAX
+      - convert_fixedpoint_to_int(
+          fixedpoint_divide_int(t->recent_cpu, 4))
+      - (t->nice * 2);
+  if (priority > PRI_MAX)
+    {
+      priority = PRI_MAX;
+    }
+  else if (priority < PRI_MIN)
+    {
+      priority = PRI_MIN;
+    }
+  thread_update_priority_with_thread (t, priority);
+}
+
+/*
+  Sets the current thread’s nice value to new nice and recalculates
+  the thread’s priority based on the new value. If the
+  running thread no longer has the highest priority, yields.
+*/
 void
 thread_set_nice (int nice UNUSED) 
 {
-  /* Not yet implemented. */
+  enum intr_level oldlevle = intr_disable();
+
+  thread_current ()->nice = nice;
+
+  //load_avg_update ();
+  //thread_recent_cpu_update (thread_current (), NULL);
+  thread_priority_update (thread_current (), NULL);
+
+  intr_set_level (oldlevle);
+
+  /* If the running thread no longer has the highest priority, yields. */
+  struct list_elem *max_elem = list_max (&ready_list, value_less, NULL);
+  struct thread *thread = list_entry (max_elem, struct thread, elem);
+  if(thread_current ()->priority < thread->priority )
+    {
+      thread_yield();
+    }
 }
 
 /* Returns the current thread's nice value. */
 int
-thread_get_nice (void) 
+thread_get_nice (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  return convert_fixedpoint_to_int(
-      fixedpoint_multiply_int(load_avg, 100));
+  return convert_fixedpoint_to_int (
+      fixedpoint_multiply_int (load_avg, 100));
 }
 
 /* load_avg = (59/60)*load_avg + (1/60)*ready_threads.
@@ -459,8 +507,8 @@ load_avg_update()
       ready_threads += 1;
     }
 
-  load_avg = fixedpoint_multiply(16111, load_avg)
-      + fixedpoint_multiply_int(273, ready_threads);
+  load_avg = fixedpoint_multiply (16111, load_avg)
+      + fixedpoint_multiply_int (273, ready_threads);
 }
 
 /* Returns 100 times the current thread's recent_cpu value.
@@ -486,13 +534,13 @@ thread_recent_cpu_update (struct thread *t, void *aux UNUSED)
    * multiplying load avg by recent cpu directly can cause overflow.
    */
 
-  fixedpoint double_load_avg = fixedpoint_multiply_int(load_avg, 2);
+  fixedpoint double_load_avg = fixedpoint_multiply_int (load_avg, 2);
   fixedpoint double_load_avg_plus_one =
-      fixedpoint_add_int(double_load_avg, 1);
-  fixedpoint temp = fixedpoint_divide(double_load_avg,
+      fixedpoint_add_int (double_load_avg, 1);
+  fixedpoint temp = fixedpoint_divide (double_load_avg,
       double_load_avg_plus_one);
-  temp = fixedpoint_multiply(temp, t->recent_cpu);
-  t->recent_cpu = temp + convert_int_to_fixedpoint(t->nice);
+  temp = fixedpoint_multiply (temp, t->recent_cpu);
+  t->recent_cpu = temp + convert_int_to_fixedpoint (t->nice);
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -589,11 +637,31 @@ init_thread (struct thread *t, const char *name, int priority)
   /* 初始化为不是优先级被捐赠者。 */
   t->is_donee = false;
 
-  /* 初始化recent_cpu为0.*/
-  t->recent_cpu = 0;
+  /* 初始化除initial进程外其它进程nice为父亲进程的nice. */
+  if (is_thread (running_thread ())
+      && thread_current () != initial_thread)
+    {
+      t->nice = thread_current ()->nice;
 
-  /* 初始化nice为0. */
-  t->nice = 0;
+      /* 进程初始化时recent_cpu的值肯定为0，所以在下面算式省略掉。 */
+      if(thread_mlfqs)
+        {
+          int priority = PRI_MAX - t->nice * 2;
+          if (priority > PRI_MAX)
+            {
+              priority = PRI_MAX;
+            }
+          t->priority = priority;
+        }
+
+      /* The initial value of recent cpu is 0 in the first
+       * thread created, or the parent’s value in other new threads.*/
+      t->recent_cpu = thread_current ()->recent_cpu;
+    }
+  else
+    {
+      t->recent_cpu = 0;
+    }
 
   /* 初始化持有锁链表 */
   list_init (&t->hold_lock_list);
