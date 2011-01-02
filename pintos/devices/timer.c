@@ -219,8 +219,19 @@ timer_interrupt (struct intr_frame *args UNUSED)
   /* ticks增加 */
   ticks++;
 
+  /*
+  load avg must be updated exactly when the system tick counter
+  reaches a multiple of a second, that is, when timer_ticks ()
+  % TIMER_FREQ == 0, and not at any other time.
+   */
+  if (ticks % TIMER_FREQ == 0)
+    {
+      load_avg_update();
+    }
+
   /* 遍历all_list链表中所有进程，进行闹铃检测。 */
   thread_foreach (alarm_check, 0);
+
   intr_set_level (oldlevel);
 
   /* 如果时间片到，会进行调度 */
