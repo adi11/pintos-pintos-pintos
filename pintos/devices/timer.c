@@ -24,6 +24,17 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* 所有闹钟列表。 */
+static struct list alarm_list;
+
+/* 闹钟结构体。 */
+struct alarm
+{
+  struct list_elem elem;                /* list element. */
+  int ticks;                            /* ticks数量。 */
+  struct thread *thread;                /* 启动该闹钟的进程。 */
+};
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
@@ -37,6 +48,8 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+
+  alarm_init ();
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -84,13 +97,23 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+/* 初始化闹铃。 */
+void
+alarm_init ()
+{
+  list_init (&alarm_list);
+}
+
 /* 设置闹铃并开启睡眠 */
 void
 alarm_on(struct thread *t, int ticks)
 {
   enum intr_level old_level;
+  struct alarm alarm;
 
-  t->sleep_ticks = ticks;
+  alarm.ticks = ticks;
+  alarm.thread = t;
+  list_push_back (&alarm_list, &alarm.elem);
 
   /* thread_block()方法需要关闭中断 */
   old_level = intr_disable ();
@@ -100,17 +123,21 @@ alarm_on(struct thread *t, int ticks)
 
 /* 检查进程睡眠闹钟时间是否到达 */
 void
-alarm_check(struct thread *t, void *aux UNUSED)
+alarm_check_all ()
 {
-  if (t->status == THREAD_BLOCKED)
+  struct list_elem *e;
+
+  for (e = list_begin (&alarm_list); e != list_end (&alarm_list);
+       e = list_next (e))
     {
-      if (t->sleep_ticks > 0)
+      struct alarm *a = list_entry (e, struct alarm, elem);
+      if (a->ticks > 0)
         {
-          t->sleep_ticks--;
-          /* 如果睡眠时间减1后，sleep_ticks变为0，则应该唤醒该进程 */
-          if (t->sleep_ticks == 0)
+          a->ticks--;
+          if (a->ticks == 0)
             {
-              alarm_wakeup (t);
+              list_remove (e);
+              alarm_wakeup (a->thread);
             }
         }
     }
@@ -118,7 +145,7 @@ alarm_check(struct thread *t, void *aux UNUSED)
 
 /* 闹钟时间到，唤醒睡眠进程。 */
 void
-alarm_wakeup(struct thread *t)
+alarm_wakeup (struct thread *t)
 {
   /* 解除阻塞，放到就绪队列。 */
   thread_unblock (t);
@@ -219,8 +246,6 @@ timer_interrupt (struct intr_frame *args UNUSED)
   /* ticks增加 */
   ticks++;
 
-  /* NOTE: 时钟中断中可能之行任务过重，当把编译优化去掉时，mlfqs-load-60和
-   * mlfqs-load-avg都无法过。考虑优化。*/
   if (thread_mlfqs)
     {
       /* 更新当前非idle进程运行进程recent_cpu. */
@@ -255,8 +280,8 @@ timer_interrupt (struct intr_frame *args UNUSED)
         }
     }
 
-  /* 遍历all_list链表中所有进程，进行闹铃检测。 */
-  thread_foreach (alarm_check, 0);
+  /* 遍历alarm_list链表中所有闹钟，进行闹铃检测。 */
+  alarm_check_all();
 
   intr_set_level (oldlevel);
 
