@@ -15,9 +15,13 @@
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+None.
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
+
+None.
 
 			     ALARM CLOCK
 			     ===========
@@ -28,76 +32,130 @@
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-Added to struct thread:
-	
-	int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
+/* 所有闹钟列表。 */
+static struct list alarm_list;
+
+/* 闹钟结构体。 */
+struct alarm
+{
+  struct list_elem elem;                /* list element. */
+  int ticks;                            /* ticks数量。 */
+  struct thread *thread;                /* 启动该闹钟的进程。 */
+};
 
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
 
-	在timer_sleep()中，去掉忙等待代码，改为开启闹钟。将进程放入阻塞队列进行睡眠。
+在timer_sleep()中，去掉忙等待代码，改为开启闹钟。将进程放入阻塞队列进行睡眠。
 
-	void
-	timer_sleep (int64_t ticks)
-	{
-	  ASSERT (intr_get_level () == INTR_ON);
+void
+timer_sleep (int64_t ticks)
+{
+  ASSERT (intr_get_level () == INTR_ON);
 
-	  /* 如果睡眠ticks数量<=0，直接返回。 */
-	  if (ticks <= 0)
-	    {
-	      return;
-	    }
+  /* 如果睡眠ticks数量<=0，直接返回。 */
+  if (ticks <= 0)
+    {
+      return;
+    }
 
-	  /* 开启闹铃。 */
-	  alarm_on (thread_current (), ticks);
-	}
+  /* 开启闹铃。 */
+  alarm_on (thread_current (), ticks);
+}
 
-	在timer interrupt handler中，检测闹铃情况。如果进程已经睡满ticks个周期，则
-	进行唤醒，将进程从阻塞队列队列中取出，放入就绪队列。否则，继续睡眠。
+/* 设置闹铃并开启睡眠 */
+void
+alarm_on(struct thread *t, int ticks)
+{
+  enum intr_level old_level;
+  struct alarm alarm;
 
-	/* Timer interrupt handler. */
-	static void
-	timer_interrupt (struct intr_frame *args UNUSED)
-	{
-	  enum intr_level oldlevel = intr_disable ();
+  alarm.ticks = ticks;
+  alarm.thread = t;
+  list_push_back (&alarm_list, &alarm.elem);
 
-	  /* ticks增加 */
-	  ticks++;
+  /* thread_block()方法需要关闭中断 */
+  old_level = intr_disable ();
+  thread_block();
+  intr_set_level (old_level);
+}
 
-	  /* 遍历all_list链表中所有进程，进行闹铃检测。 */
-	  /* thread_foreach()方法为thread.c中原有的方法。*/
-	  thread_foreach (alarm_check, 0);
-	  intr_set_level (oldlevel);
+在timer interrupt handler中，检测闹铃情况。如果进程已经睡满ticks个周期，则
+进行唤醒，将进程从阻塞队列队列中取出，放入就绪队列。否则，继续睡眠。
 
-	  /* 如果时间片到，会进行调度 */
-	  thread_tick ();
-	}
+/* Timer interrupt handler. */
+static void
+timer_interrupt (struct intr_frame *args UNUSED)
+{
+  enum intr_level oldlevel = intr_disable ();
+
+  /* ticks增加 */
+  ticks++;
+
+  /* 遍历alarm_list链表中所有闹钟，进行闹铃检测。 */
+  alarm_check_all();
+  intr_set_level (oldlevel);
+
+  /* 如果时间片到，会进行调度 */
+  thread_tick ();
+}
+
+/* 检查进程睡眠闹钟时间是否到达 */
+void
+alarm_check_all ()
+{
+  struct list_elem *e;
+
+  for (e = list_begin (&alarm_list); e != list_end (&alarm_list);
+       e = list_next (e))
+    {
+      struct alarm *a = list_entry (e, struct alarm, elem);
+      if (a->ticks > 0)
+        {
+          a->ticks--;
+          if (a->ticks == 0)
+            {
+              list_remove (e);
+              alarm_wakeup (a->thread);
+            }
+        }
+    }
+}
+
+/* 闹钟时间到，唤醒睡眠进程。 */
+void
+alarm_wakeup (struct thread *t)
+{
+  /* 解除阻塞，放到就绪队列。 */
+  thread_unblock (t);
+}
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
 
-	暂时没有。
+由原有的检测每一个进程的闹铃情况，改为检测每一个闹铃的情况。减少了查询次数。
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
-	
-	TODO： 怎么个进程，不明白？
+
+在完成进程睡眠操作后，最后调用进程调度函数。关闭中断环境下，则不会因为时间片到而被
+另一个进程抢占。两方面保证不会竞争。
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-	TODO: 什么意思？
+在进行睡眠操作时，关闭中断，所以不会发生在调用timer_sleep()是产生时钟中断。
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
 
-	为什么选择这个设计，其实没有选择，只想到这么一个设计。
+因为这个实现起来比较简单。比其它设计的优点是实现简单。
 
 			 PRIORITY SCHEDULING
 			 ===================
@@ -124,175 +182,175 @@ Added to sturct lock:
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
-	有三个进程P1，P2，P3优先级从低到高。有两个锁L1，L2。
-	P1进程请求锁L1，请求成功。然后P2进程请求锁L1失败，请求锁L2成功。
-	P3进程请求锁L2失败。此时P3通过检测锁L2的Holder得知锁L2被P2占有，
-	然后P3将优先级捐赠给P2，P2通过检测自己请求的锁列表acquire_lock_list
-	来找到自己请求的锁的Holder，然后将自己（P2）的优先级捐赠给P1（此时P2
-	的优先级是刚有P3捐赠而来的优先级），至此P1、P2拥有P3的优先级。完成了
-	嵌套优先级捐赠。
+有三个进程P1，P2，P3优先级从低到高。有两个锁L1，L2。
+P1进程请求锁L1，请求成功。然后P2进程请求锁L1失败，请求锁L2成功。
+P3进程请求锁L2失败。此时P3通过检测锁L2的Holder得知锁L2被P2占有，
+然后P3将优先级捐赠给P2，P2通过检测自己请求的锁列表acquire_lock_list
+来找到自己请求的锁的Holder，然后将自己（P2）的优先级捐赠给P1（此时P2
+的优先级是刚有P3捐赠而来的优先级），至此P1、P2拥有P3的优先级。完成了
+嵌套优先级捐赠。
 
-	P1 <---- L1
-	       ^
-	      /
-	     /
-	    /
-	   /
-	  /
-	P2 <---- L2
-	       ^
-	      /
-	     /
-	    /
-	   /
-	  /
-	P3 
+P1 <---- L1
+       ^
+      /
+     /
+    /
+   /
+  /
+P2 <---- L2
+       ^
+      /
+     /
+    /
+   /
+  /
+P3 
 
 ---- ALGORITHMS ----
 
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
 
-	进行V操作时，从信号量的等待进程中选择一个优先级最高的进程，解除阻塞状态。放入就绪队列。
+进行V操作时，从信号量的等待进程中选择一个优先级最高的进程，解除阻塞状态。放入就绪队列。
 
-	void
-	sema_up (struct semaphore *sema) 
-	{
-	  enum intr_level old_level;
+void
+sema_up (struct semaphore *sema) 
+{
+  enum intr_level old_level;
 
-	  ASSERT (sema != NULL);
+  ASSERT (sema != NULL);
 
-	  old_level = intr_disable ();
-	  if (!list_empty (&sema->waiters))
-	    {
-	      /* 唤醒优先级最高的线程 */
-	      struct list_elem *max_elem = list_max (&sema->waiters, priority_less, NULL);
-	      list_remove (max_elem);
-	      thread_unblock (list_entry (max_elem, struct thread, elem));
-	    }
+  old_level = intr_disable ();
+  if (!list_empty (&sema->waiters))
+    {
+      /* 唤醒优先级最高的线程 */
+      struct list_elem *max_elem = list_max (&sema->waiters, priority_less, NULL);
+      list_remove (max_elem);
+      thread_unblock (list_entry (max_elem, struct thread, elem));
+    }
 
-	  sema->value++;
-	  intr_set_level (old_level);
+  sema->value++;
+  intr_set_level (old_level);
 
-	  /* 线程调度 */
-	  thread_yield ();
-	}
+  /* 线程调度 */
+  thread_yield ();
+}
 
 >> B4: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
 
-	当一个进程请求锁的时候，如果这个锁已经被别的进程持有，那么当前进程会和持有该锁的进程
-	的优先级进行比较，如果优先级高于持有锁的进程，则将优先级捐赠给持有锁的优先级。并且持
-	有锁的进程会检测自己请求的锁，如果存在请求但是没有持有的锁则检测持有请求的锁的进程与
-	请求该锁的进程的优先级，如果请求锁的优先级高于持有锁的优先级，则将请求锁的优先级捐献
-	给持有锁的进程，然后依次比较，直到一个进程没有请求而不得的锁未知。
+当一个进程请求锁的时候，如果这个锁已经被别的进程持有，那么当前进程会和持有该锁的进程
+的优先级进行比较，如果优先级高于持有锁的进程，则将优先级捐赠给持有锁的优先级。并且持
+有锁的进程会检测自己请求的锁，如果存在请求但是没有持有的锁则检测持有请求的锁的进程与
+请求该锁的进程的优先级，如果请求锁的优先级高于持有锁的优先级，则将请求锁的优先级捐献
+给持有锁的进程，然后依次比较，直到一个进程没有请求而不得的锁未知。
 
-	void
-	lock_acquire (struct lock *lock)
-	{
-	  enum intr_level old_level;
+void
+lock_acquire (struct lock *lock)
+{
+  enum intr_level old_level;
 
-	  ASSERT (lock != NULL);
-	  ASSERT (!intr_context ());
-	  ASSERT (!lock_held_by_current_thread (lock));
+  ASSERT (lock != NULL);
+  ASSERT (!intr_context ());
+  ASSERT (!lock_held_by_current_thread (lock));
 
-	  old_level = intr_disable ();
+  old_level = intr_disable ();
 
-	  /* 将当前进程请求的锁放入请求锁列表中。 */
-	  list_push_back (&thread_current()->acquire_lock_list, &lock->acquire_elem);
+  /* 将当前进程请求的锁放入请求锁列表中。 */
+  list_push_back (&thread_current()->acquire_lock_list, &lock->acquire_elem);
 
-	  /* 如果当前线程不是锁的持有者，并且当前线程的优先级比锁的持有者优先级高，
-	   * 则将当前优先级捐献给锁的持有者。 */
-	  if (lock->holder != NULL
-	      && thread_get_priority () > lock->holder->priority)
-	    {
-	      thread_update_priority_with_thread (lock->holder,
-		  thread_get_priority ());
-	      lock->holder->is_donee = true;
+  /* 如果当前线程不是锁的持有者，并且当前线程的优先级比锁的持有者优先级高，
+   * 则将当前优先级捐献给锁的持有者。 */
+  if (lock->holder != NULL
+      && thread_get_priority () > lock->holder->priority)
+    {
+      thread_update_priority_with_thread (lock->holder,
+	  thread_get_priority ());
+      lock->holder->is_donee = true;
 
-	      donate_chain (&(lock->holder->acquire_lock_list));
-	    }
+      donate_chain (&(lock->holder->acquire_lock_list));
+    }
 
-	  intr_set_level (old_level);
+  intr_set_level (old_level);
 
-	  /* 如果阻塞，会进行调度。 */
-	  sema_down (&lock->semaphore);
+  /* 如果阻塞，会进行调度。 */
+  sema_down (&lock->semaphore);
 
-	  old_level = intr_disable ();
-	  lock->holder = thread_current ();
+  old_level = intr_disable ();
+  lock->holder = thread_current ();
 
-	  /* 更新进程请求锁 */
-	  list_remove (&lock->acquire_elem);
+  /* 更新进程请求锁 */
+  list_remove (&lock->acquire_elem);
 
-	  /* 更新线程持有的锁 */
-	  list_push_back (&thread_current ()->hold_lock_list, &lock->elem);
+  /* 更新线程持有的锁 */
+  list_push_back (&thread_current ()->hold_lock_list, &lock->elem);
 
-	  intr_set_level (old_level);
-	}
+  intr_set_level (old_level);
+}
 
 >> B5: Describe the sequence of events when lock_release() is called
 >> on a lock that a higher-priority thread is waiting for.
 
-	当一个进程释放它请求的锁时，该进程会检测它是否还持有别的锁，如果没有，则将优先级还原到最开始
-	的优先级；否则，从持有的锁中寻找阻塞在该锁中优先级最大的进程，然后找到这个最大的优先级，如果
-	当前进程优先级小于这个最大优先级，则将这个最大优先级捐赠个当前进程；否则检测当前进程是否处于
-	被捐赠优先级状态，如果处于则将当前进程的优先级降低到那个最大值。
+当一个进程释放它请求的锁时，该进程会检测它是否还持有别的锁，如果没有，则将优先级还原到最开始
+的优先级；否则，从持有的锁中寻找阻塞在该锁中优先级最大的进程，然后找到这个最大的优先级，如果
+当前进程优先级小于这个最大优先级，则将这个最大优先级捐赠个当前进程；否则检测当前进程是否处于
+被捐赠优先级状态，如果处于则将当前进程的优先级降低到那个最大值。
 
-	void
-	lock_release (struct lock *lock) 
+void
+lock_release (struct lock *lock) 
+{
+  enum intr_level old_level;
+  int max_priority;
+
+  ASSERT (lock != NULL);
+  ASSERT (lock_held_by_current_thread (lock));
+
+  old_level = intr_disable ();
+  /* 将这个锁从当前进程的hold_lock_list移除 */
+  list_remove (&lock->elem);
+
+  lock->holder = NULL;
+
+  /* 判断当前进程还持有锁的链表是否为空 */
+  if (!list_empty (&thread_current ()->hold_lock_list))
+    {
+      max_priority =
+	  get_max_priority_thread (&thread_current ()->hold_lock_list);
+      /* 如果当前进程优先级小于持有锁队列中进程的最大优先级，则进行被捐赠，将
+       * 优先级设置为该最大值。 */
+      if (thread_current ()->priority < max_priority)
 	{
-	  enum intr_level old_level;
-	  int max_priority;
-
-	  ASSERT (lock != NULL);
-	  ASSERT (lock_held_by_current_thread (lock));
-
-	  old_level = intr_disable ();
-	  /* 将这个锁从当前进程的hold_lock_list移除 */
-	  list_remove (&lock->elem);
-
-	  lock->holder = NULL;
-
-	  /* 判断当前进程还持有锁的链表是否为空 */
-	  if (!list_empty (&thread_current ()->hold_lock_list))
-	    {
-	      max_priority =
-		  get_max_priority_thread (&thread_current ()->hold_lock_list);
-	      /* 如果当前进程优先级小于持有锁队列中进程的最大优先级，则进行被捐赠，将
-	       * 优先级设置为该最大值。 */
-	      if (thread_current ()->priority < max_priority)
-		{
-		  thread_update_priority_with_thread (thread_current (),
-		      max_priority);
-		  thread_current ()->is_donee = true;
-		}
-	      else
-		{
-		  /* 如果当前进程处有被捐助优先级状态，并且当前优先级大于持有锁的队列中
-		   * 进程的优先级，则将当前进程的优先级设置为持有锁队列中最大优先级。*/
-		  if (thread_current ()->is_donee)
-		    {
-		      thread_update_priority_with_thread (thread_current (),
-		          max_priority);
-		    }
-		}
-	    }
-	  else
-	    {
-	      /* 如果当前进程为被捐赠优先级进程，并且所持有的锁个数为0时，
-	       * 恢复该进程最原始的优先级。 */
-	      if (thread_current ()->is_donee)
-		{
-		  thread_update_priority_with_thread (thread_current (),
-		      thread_current ()->ori_pri);
-		  thread_current ()->is_donee = false;
-		}
-	    }
-
-	  intr_set_level (old_level);
-
-	  sema_up (&lock->semaphore);
+	  thread_update_priority_with_thread (thread_current (),
+	      max_priority);
+	  thread_current ()->is_donee = true;
 	}
+      else
+	{
+	  /* 如果当前进程处有被捐助优先级状态，并且当前优先级大于持有锁的队列中
+	   * 进程的优先级，则将当前进程的优先级设置为持有锁队列中最大优先级。*/
+	  if (thread_current ()->is_donee)
+	    {
+	      thread_update_priority_with_thread (thread_current (),
+	          max_priority);
+	    }
+	}
+    }
+  else
+    {
+      /* 如果当前进程为被捐赠优先级进程，并且所持有的锁个数为0时，
+       * 恢复该进程最原始的优先级。 */
+      if (thread_current ()->is_donee)
+	{
+	  thread_update_priority_with_thread (thread_current (),
+	      thread_current ()->ori_pri);
+	  thread_current ()->is_donee = false;
+	}
+    }
+
+  intr_set_level (old_level);
+
+  sema_up (&lock->semaphore);
+}
 
 ---- SYNCHRONIZATION ----
 
@@ -300,19 +358,17 @@ Added to sturct lock:
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
 
-	如果优先级处于捐赠状态并且小于当前优先级，不能立即更改它的优先级。
-	要等优先级捐赠结束后才能变更优先级。当请求锁的进程优先级变更为更高
-	时，要重新计算捐赠优先级。
-
-	TODO： Can you use a lock to avoid this race?什么意思？
+如果优先级处于捐赠状态并且小于当前优先级，不能立即更改它的优先级。
+要等优先级捐赠结束后才能变更优先级。当请求锁的进程优先级变更为更高
+时，要重新计算捐赠优先级。
 
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
 
-	因为经过一番对优先级捐赠的理解和为什么要进行优先级捐赠的理解，想到这个设计。为什么选择
-	这个设计，其实没有选择，只想到这么一个设计。
+因为经过一番对优先级捐赠的理解和为什么要进行优先级捐赠的理解，想到这个设计。为什么选择
+这个设计，其实没有选择，只想到这么一个设计。
 
 			  ADVANCED SCHEDULER
 			  ==================
@@ -323,9 +379,9 @@ Added to sturct lock:
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-	typedef int fixedpoint;		/* 模拟定点小数，在fixed-point.h中定义 */
+typedef int fixedpoint;		/* 模拟定点小数，在fixed-point.h中定义 */
 
-	static fixedpoint load_avg;     /* load_avg，在thread.c中定义。 */
+static fixedpoint load_avg;     /* load_avg，在thread.c中定义。 */
 
 Added to struct thread:
 	
@@ -339,34 +395,34 @@ Added to struct thread:
 >> scheduling decision and the priority and recent_cpu values for each
 >> thread after each given number of timer ticks:
 
-	timer  recent_cpu    priority   thread
-	ticks   A   B   C   A   B   C   to run
-	-----  --  --  --  --  --  --   ------
-	 0	0   0   0  63  61  59    A 
-	 4	4   0   0  62  61  59    A
-	 8	8   0   0  61  61  59    B
-	12      8   4   0  61  60  59    A
-	16     12   4   0  60  60  59    B
-	20     12   8   0  60  59  59    A
-	24     16   8   0  59  59  59    C
-	28     16   8   4  59  59  58    B
-	32     16  12   4  59  58  58    A
-	36     20  12   4  58  58  58    C
+timer  recent_cpu    priority   thread
+ticks   A   B   C   A   B   C   to run
+-----  --  --  --  --  --  --   ------
+ 0	    0   0   0  63  61  59    A 
+ 4	    4   0   0  62  61  59    A
+ 8	    8   0   0  61  61  59    B
+12      8   4   0  61  60  59    A
+16     12   4   0  60  60  59    B
+20     12   8   0  60  59  59    A
+24     16   8   0  59  59  59    C
+28     16   8   4  59  59  58    B
+32     16  12   4  59  58  58    A
+36     20  12   4  58  58  58    C
 
 >> C3: Did any ambiguities in the scheduler specification make values
 >> in the table uncertain?  If so, what rule did you use to resolve
 >> them?  Does this match the behavior of your scheduler?
 
-	如果还有其它进程可能会产生不同。还有如果这3个进程更改了自己nice值会引起优先级变更，
-	调度的顺序可能回发生变化。或者某个进程阻塞在一些信号量上等等。
+如果还有其它进程可能会产生不同。还有如果这3个进程更改了自己nice值会引起优先级变更，
+调度的顺序可能回发生变化。或者某个进程阻塞在一些信号量上等等。
 
-	如果一些操作引发优先级变更会立即进行调度，如果当前进程不再是优先级最高的进程，会立即
-	被抢占。
+如果一些操作引发优先级变更会立即进行调度，如果当前进程不再是优先级最高的进程，会立即
+被抢占。
 
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
 
-	TODO： 不懂什么意思？
+TODO： 不懂什么意思？
 
 ---- RATIONALE ----
 
@@ -375,9 +431,7 @@ Added to struct thread:
 >> time to work on this part of the project, how might you choose to
 >> refine or improve your design?
 
-	设计缺点：时钟中断处理函数中计算量有点大，占据CPU时间可能较长。
-	
-	//可以考虑用空间换时间方法。
+设计缺点：时钟中断处理函数中计算量有点大，占据CPU时间可能较长。
 
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
@@ -386,11 +440,9 @@ Added to struct thread:
 >> type and/or a set of functions or macros to manipulate fixed-point
 >> numbers, why did you do so?  If not, why not?
 
-	typedef int fixedpoint;
-	这种方法其实fixedpoint就是int型。只是在语义上和代码可读性上进行一些提升。
-	这个方法比较简便。
-
-	TODO： 后面几问什么意思？
+typedef int fixedpoint;
+这种方法其实fixedpoint就是int型。只是在语义上和代码可读性上进行一些提升。
+这个方法比较简便。
 
 			   SURVEY QUESTIONS
 			   ================
