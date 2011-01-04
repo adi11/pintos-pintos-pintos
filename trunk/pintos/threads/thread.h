@@ -91,7 +91,7 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
 
-    int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
+    //int sleep_ticks;                    /* 存储睡眠ticks数，值>0时表示在睡眠,<=0没有睡眠 */
 
     int ori_pri;                        /* 最原始的优先级 */
     bool is_donee;                      /* 是否是被捐赠优先级者 */

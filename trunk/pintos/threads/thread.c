@@ -629,7 +629,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
 
   /* 初始化睡眠ticks数量 */
-  t->sleep_ticks = 0;
+  //t->sleep_ticks = 0;
 
   /* 初始化最原始的优先级（保存） */
   t->ori_pri = priority;
